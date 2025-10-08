@@ -27,54 +27,9 @@ try:
 except Exception:
     pass
 
-# ---------------------------------------------------------------
-# Seitenlayout & Stil
-# ---------------------------------------------------------------
-st.set_page_config(page_title="Schaden-Zähler mobil", layout="wide")
-st.markdown(
-    """
-    <style>
-    /* Basis-Schrift verkleinern */
-    html, body, [class*="css"]  {
-        font-size: 15px !important;
-    }
-
-    /* Große Buttons für Touch */
-    div.stButton > button {
-        width: 100%;
-        height: 50px;
-        font-size: 18px;
-        font-weight: bold;
-        border-radius: 10px;
-    }
-
-    /* Tabellen kompakter */
-    table {
-        width: 100%;
-        font-size: 14px;
-    }
-
-    th, td {
-        padding: 4px 6px !important;
-    }
-
-    /* Überschriftenabstand */
-    h3 {
-        margin-top: 1.2em;
-        margin-bottom: 0.5em;
-    }
-
-    /* Trennlinie */
-    hr {
-        margin: 1.2em 0;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-st.title("📱 Schaden-Zähler (Mobile Version)")
-st.caption("Ziel je Schadenart = höchster Wert aller Mitarbeitenden (außer **CGrothe**: –25 %).")
+st.set_page_config(page_title="Schaden-Zähler", layout="wide")
+st.title("📊 Schaden-Zähler mit Zielvorgaben")
+st.caption("Ziel je Schadenart = höchster Wert aller Mitarbeitenden, außer **CGrothe** (–25 %).")
 
 # ---------------------------------------------------------------
 # Initialisierung
@@ -128,9 +83,9 @@ def ocr_image(img_bytes, engine_name):
     """Liest Text aus Bild (mit EXIF-Korrektur & Verkleinerung)."""
     try:
         image = Image.open(BytesIO(img_bytes))
-        image = ImageOps.exif_transpose(image)
+        image = ImageOps.exif_transpose(image)       # Drehung korrigieren
         image = image.convert("RGB")
-        image.thumbnail((2000, 2000))
+        image.thumbnail((2000, 2000))                # Größe begrenzen
     except Exception as e:
         st.error(f"Bild konnte nicht geöffnet werden: {e}")
         return ""
@@ -155,7 +110,7 @@ def ocr_image(img_bytes, engine_name):
         return ""
 
 # ---------------------------------------------------------------
-# Parser
+# Parser für Access-Stil-Block
 # ---------------------------------------------------------------
 def parse_block_access_style(text):
     t = text.replace("\\n", " ").replace("\\r", " ").replace("\u00a0", " ").replace("\u200b", " ")
@@ -202,6 +157,7 @@ def parse_block_access_style(text):
 # Zähler-Update
 # ---------------------------------------------------------------
 def incr(name, n=1, rdid=None):
+    """Erhöht oder verringert Zähler (niemals unter 0)."""
     st.session_state.counts_total[name] = max(0, int(st.session_state.counts_total.get(name, 0)) + int(n))
     if name not in st.session_state.counts_by_type:
         st.session_state.counts_by_type[name] = {}
@@ -213,7 +169,7 @@ def incr(name, n=1, rdid=None):
 # ---------------------------------------------------------------
 # Tabs
 # ---------------------------------------------------------------
-tab1, tab2, tab3 = st.tabs(["📸 Foto verarbeiten", "👥 Mitarbeitende", "📊 Übersicht"])
+tab1, tab2, tab3 = st.tabs(["📸 Foto verarbeiten", "👥 Mitarbeitende", "📊 Übersicht & Export"])
 
 # ---------------------------------------------------------------
 # Tab 1 – Fotoverarbeitung
@@ -245,11 +201,10 @@ with tab1:
             st.json(aggregated)
 
 # ---------------------------------------------------------------
-# Tab 2 – Mitarbeitende (Mobile Layout)
+# Tab 2 – Mitarbeitende
 # ---------------------------------------------------------------
 with tab2:
     st.subheader("Mitarbeitende – Übersicht & Buchung")
-
     targets, max_per_type = compute_targets(st.session_state.counts_by_type)
 
     if not st.session_state.counts_total:
@@ -262,17 +217,18 @@ with tab2:
 
             st.markdown(f"### {name} – Gesamt: **{total}**")
 
-            # + / – Buttons pro Schadenart (volle Breite)
-            for t in st.session_state.known_types:
-                col_plus, col_minus = st.columns(2)
-                with col_plus:
-                    if st.button(f"➕ {t}", key=f"plus_{name}_{t}".replace(" ", "_")):
-                        incr(name, 1, t)
-                with col_minus:
-                    if st.button(f"➖ {t}", key=f"minus_{name}_{t}".replace(" ", "_")):
-                        incr(name, -1, t)
+            # + / – Buttons je Schadenart
+            if st.session_state.known_types:
+                for t in st.session_state.known_types:
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button(f"+1 {t}", key=f"plus_{name}_{t}".replace(" ", "_")):
+                            incr(name, 1, t)
+                    with c2:
+                        if st.button(f"–1 {t}", key=f"minus_{name}_{t}".replace(" ", "_")):
+                            incr(name, -1, t)
 
-            # Kompakte Tabelle mit Ist / Ziel / Δ
+            # Tabelle
             if max_per_type:
                 st.markdown("**Schadenarten – Ist / Ziel / Δ**")
                 table_md = "| Schadenart | Ist | Ziel | Δ |\n|---|---|---|---|\n"
@@ -290,13 +246,13 @@ with tab2:
                     table_md += f"| {t} | {ist} | {ziel}{special} | {delta_str} |\n"
                 st.markdown(table_md)
 
-            st.markdown("<hr>", unsafe_allow_html=True)
+            st.markdown("---")
 
 # ---------------------------------------------------------------
 # Tab 3 – Übersicht
 # ---------------------------------------------------------------
 with tab3:
-    st.subheader("Gesamtübersicht")
+    st.subheader("Übersicht")
     targets, max_per_type = compute_targets(st.session_state.counts_by_type)
     if not st.session_state.counts_total:
         st.info("Keine Daten vorhanden.")
