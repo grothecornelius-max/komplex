@@ -28,7 +28,7 @@ except Exception:
     pass
 
 st.set_page_config(page_title="Komplex Schadenverteilung", layout="wide")
-st.title("📊 Schaden-Zähler mit Zielvorgaben")
+st.title("📊 Komplex Schadenverteilung")
 st.caption("Ziel je Schadenart = höchster Wert aller Mitarbeitenden, außer **CGrothe** (–25 %).")
 
 # ---------------------------------------------------------------
