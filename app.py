@@ -237,7 +237,6 @@ with tab1:
 with tab2:
     st.subheader("Mitarbeitende – Übersicht & Buchung")
 
-    # Ziele berechnen
     targets, max_per_type = compute_targets(st.session_state.counts_by_type)
 
     if not st.session_state.counts_total:
@@ -250,14 +249,12 @@ with tab2:
 
             st.markdown(f"### {name} – Gesamt: **{total}**")
 
-            # +1-Buttons je Schadenart (ohne Rerun)
             if st.session_state.known_types:
                 cols = st.columns(len(st.session_state.known_types))
                 for i, t in enumerate(st.session_state.known_types):
                     if cols[i].button(f"+1 {t}", key=f"{name}_{t}"):
                         incr(name, 1, t)
 
-            # Tabelle: Ist / Ziel / Δ
             if max_per_type:
                 st.markdown("**Schadenarten – Ist / Ziel / Δ**")
                 table_md = "| Schadenart | Ist | Ziel | Δ |\n|---|---|---|---|\n"
@@ -276,6 +273,7 @@ with tab2:
                 st.markdown(table_md)
 
             st.markdown("---")
+
 
     # ---------------------------------------------------------------
     # Hauptbereich: Übersicht + Buttons
