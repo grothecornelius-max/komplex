@@ -32,8 +32,6 @@ def init_state():
         st.session_state.counts_total = {}
     if "counts_by_type" not in st.session_state:
         st.session_state.counts_by_type = {}
-    if "history" not in st.session_state:
-        st.session_state.history = []
     if "known_types" not in st.session_state:
         st.session_state.known_types = ["Regulierer", "Sachverständiger"]
 
@@ -67,7 +65,7 @@ def compute_targets(counts_by_type: dict):
         tmap = {}
         for rd_id, m in max_per_type.items():
             if normalize_name(name) == "cgrothe":
-                tmap[rd_id] = int((m * 0.75) // 1)  # 25 % weniger, abrunden
+                tmap[rd_id] = int((m * 0.75) // 1)
             else:
                 tmap[rd_id] = int(m)
         targets[name] = tmap
@@ -142,14 +140,14 @@ def parse_block_access_style(text):
     return results
 
 def incr(name, n=1, rdid=None):
-    """Erhöht Zähler."""
-    st.session_state.counts_total[name] = int(st.session_state.counts_total.get(name, 0)) + int(n)
+    """Erhöht oder verringert Zähler (niemals unter 0)."""
+    st.session_state.counts_total[name] = max(0, int(st.session_state.counts_total.get(name, 0)) + int(n))
     if name not in st.session_state.counts_by_type:
         st.session_state.counts_by_type[name] = {}
     if rdid:
-        st.session_state.counts_by_type[name][rdid] = int(
-            st.session_state.counts_by_type[name].get(rdid, 0)
-        ) + int(n)
+        current = int(st.session_state.counts_by_type[name].get(rdid, 0))
+        new_value = max(0, current + int(n))
+        st.session_state.counts_by_type[name][rdid] = new_value
 
 # ---------------------------------------------------------------
 # Tabs
@@ -186,7 +184,7 @@ with tab1:
             st.json(aggregated)
 
 # ---------------------------------------------------------------
-# Tab 2 – Mitarbeitende (vereinfachte Ansicht)
+# Tab 2 – Mitarbeitende
 # ---------------------------------------------------------------
 with tab2:
     st.subheader("Mitarbeitende – Übersicht & Buchung")
@@ -204,18 +202,17 @@ with tab2:
             st.markdown(f"### {name} – Gesamt: **{total}**")
 
             # + / – Buttons je Schadenart
-    if st.session_state.known_types:
-        for t in st.session_state.known_types:
-            col_plus, col_minus = st.columns(2)
-        with col_plus:
-            if st.button(f"+1 {t}", key=f"plus_{name}_{t}"):
-                incr(name, 1, t)
-        with col_minus:
-            if st.button(f"–1 {t}", key=f"minus_{name}_{t}"):
-                incr(name, -1, t)
+            if st.session_state.known_types:
+                for t in st.session_state.known_types:
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button(f"+1 {t}", key=f"plus_{name}_{t}".replace(" ", "_")):
+                            incr(name, 1, t)
+                    with c2:
+                        if st.button(f"–1 {t}", key=f"minus_{name}_{t}".replace(" ", "_")):
+                            incr(name, -1, t)
 
-
-            # Tabelle
+            # Tabelle mit Ist / Ziel / Δ
             if max_per_type:
                 st.markdown("**Schadenarten – Ist / Ziel / Δ**")
                 table_md = "| Schadenart | Ist | Ziel | Δ |\n|---|---|---|---|\n"
@@ -236,7 +233,7 @@ with tab2:
             st.markdown("---")
 
 # ---------------------------------------------------------------
-# Tab 3 – Übersicht & Export
+# Tab 3 – Übersicht
 # ---------------------------------------------------------------
 with tab3:
     st.subheader("Übersicht")
