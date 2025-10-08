@@ -254,7 +254,7 @@ with tab2:
                     for i, t in enumerate(st.session_state.known_types):
                         if cols[i].button(f"+1 {t}", key=f"{name}_{t}"):
                             incr(name, 1, t)
-                            st.experimental_rerun()
+                            st.rerun()
 
                 # Ziele / Abweichung
                 emp_targets = targets.get(name, {})
