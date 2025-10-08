@@ -18,10 +18,11 @@ try:
 except Exception:
     pass
 
-st.set_page_config(page_title="Foto → Schaden-Zähler (Mitarbeiter & Typ)", layout="wide")
-st.title("Foto-basierte Schaden-Zähler – Mitarbeiter & Schadenart (MVP)")
-st.caption("Extrahiert Zeilen: **<Anzahl> <ZUSTAENDIG> <RD_ID>**. Summen pro Mitarbeiter & Schadenart. **+1-Buttons** pro Mitarbeiter & Typ.")
+st.set_page_config(page_title="Foto → Schaden-Zähler (Blockparser)", layout="wide")
+st.title("Foto-basierte Schaden-Zähler – Blockparser für Access/Excel-OCR")
+st.caption("Unterstützt Zeilenformat **und** Blockformat: 'AnzahlvonSCHADEN … RD ID …'. Summen pro Mitarbeiter & Schadenart. +1-Buttons pro Mitarbeiter & Typ.")
 
+# ---------------------- State ----------------------
 def init_state():
     if "counts_total" not in st.session_state:
         st.session_state.counts_total = {}
@@ -34,18 +35,20 @@ def init_state():
 
 init_state()
 
+# ---------------------- Sidebar ----------------------
 with st.sidebar:
     st.header("Einstellungen")
     engine = st.selectbox("OCR-Engine", options=(ENGINES if ENGINES else ["(keine OCR-Engine gefunden)"]))
     st.markdown("---")
     st.subheader("Schadenarten (für Buttons)")
     add_type = st.text_input("Neue Schadenart")
-    if st.button("Hinzufügen ➕", key="add_type"):
+    cols = st.columns(2)
+    if cols[0].button("Hinzufügen ➕", key="add_type"):
         t = (add_type or "").strip()
         if t and t not in st.session_state.known_types:
             st.session_state.known_types.append(t)
             st.success(f"'{t}' hinzugefügt.")
-    if st.button("Auf Standard zurücksetzen", key="reset_type"):
+    if cols[1].button("Auf Standard zurücksetzen", key="reset_type"):
         st.session_state.known_types = ["Regulierer", "Sachverständiger"]
         st.success("Zurückgesetzt.")
     if st.session_state.known_types:
@@ -74,6 +77,7 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Import fehlgeschlagen: {e}")
 
+# ---------------------- OCR ----------------------
 def ocr_image(img_bytes, engine_name):
     try:
         image = Image.open(BytesIO(img_bytes)).convert("RGB")
@@ -100,24 +104,118 @@ def ocr_image(img_bytes, engine_name):
         st.warning("Keine OCR-Engine verfügbar.")
         return ""
 
-def parse_lines_access_style(text, custom_regex=None):
+# ---------------------- Parsing ----------------------
+def parse_lines_row_style(text, custom_regex=None):
+    """Row-wise parsing: '316 JHackenbroich Regulierer'"""
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     results = []
-    default_rx = r'^(?P<count>\d+)\s+(?P<name>[A-Za-zÄÖÜäöüß]+)\s*(?P<rdid>[A-Za-zÄÖÜäöüß]+)?$'
+    default_rx = r'^(?P<count>\d+)\s+(?P<name>[A-Za-zÄÖÜäöüß][\wÄÖÜäöüß\.-]+)\s+(?P<rdid>[A-Za-zÄÖÜäöüß][\wÄÖÜäöüß\.-]+)\s*$'
     rx = re.compile(custom_regex or default_rx, re.UNICODE)
     for ln in lines:
         m = rx.search(ln)
         if m:
             try:
-                count = int(m.group("count"))
+                count = int(re.sub(r'[^\d]', '', m.group("count")))
             except:
                 continue
             name = (m.group("name") or "").strip()
-            rdid = m.group("rdid").strip() if m.groupdict().get("rdid") else None
-            if name:
+            rdid = (m.group("rdid") or "").strip()
+            if name and rdid:
                 results.append((count, name, rdid))
     return results
 
+def parse_block_access_style(text):
+    """
+    Block-style parsing for OCR like:
+    'AnzahlvonSCHADEN ZUSTAENDIG 316 JHackenbroich 169 JHackenbroich ... RD ID Regulierer Sachverständiger ...'
+    Strategy:
+      1) Tokenize by whitespace.
+      2) Find the index of the 'RD' header ('RD', 'RD_ID', 'RD', 'RDID', 'RD', 'RD', etc.).
+      3) Left side contains COUNT NAME pairs; right side contains RD_ID tokens.
+      4) Zip pairs: (count,name) with types list by index.
+    """
+    # Normalize spaces/newlines, keep only tokens
+    tokens = re.findall(r'\S+', text)
+    if not tokens: 
+        return []
+
+    # Find split index where RD header starts
+    rd_header_idx = None
+    for i, tok in enumerate(tokens):
+        norm = tok.upper().replace("_", "").replace("-", "")
+        if norm in {"RD", "RDID", "RDID:", "RDID."} or (norm == "RD" and i+1 < len(tokens) and tokens[i+1].upper().startswith("ID")):
+            rd_header_idx = i
+            break
+        if tok.upper() == "RD" and i+1 < len(tokens) and tokens[i+1].upper() == "ID":
+            rd_header_idx = i
+            break
+        if tok.upper().startswith("RD") and (i+1 < len(tokens) and tokens[i+1].upper().startswith("ID")):
+            rd_header_idx = i
+            break
+        if tok.upper() in {"RD_ID", "RD-ID"}:
+            rd_header_idx = i
+            break
+        # also accept "RD" followed later by "ID" inside same line grouping
+    # Fallback: search the literal sequence "RD" "ID"
+    if rd_header_idx is None:
+        for i in range(len(tokens)-1):
+            if tokens[i].upper() == "RD" and tokens[i+1].upper() == "ID":
+                rd_header_idx = i
+                break
+
+    # If still not found, try "RD" anywhere near the end
+    if rd_header_idx is None:
+        for i, tok in enumerate(tokens):
+            if tok.upper().startswith("RD"):
+                rd_header_idx = i
+                break
+
+    # Build left and right blocks
+    left_tokens = tokens
+    right_tokens = []
+    if rd_header_idx is not None:
+        left_tokens = tokens[:rd_header_idx]
+        right_tokens = tokens[rd_header_idx:]
+        # strip header words like "RD", "ID", "RD_ID"
+        right_tokens = [t for t in right_tokens if t.upper() not in {"RD", "ID", "RD_ID", "RD-ID"}]
+
+    # Remove possible column headers at the beginning of left block
+    # like "AnzahlvonSCHADEN", "ZUSTAENDIG"
+    left_tokens_clean = []
+    skip_heads = {"ANZAHLVONSCHADEN", "ANZAHLVONSCHÄDEN", "ZUSTAENDIG", "ZUSTÄNDIG", "ZUSTAENDIG:", "ZUSTAENDIG,"}
+    for t in left_tokens:
+        if t.upper().replace("Ä", "AE").replace("Ö", "OE").replace("Ü", "UE") in skip_heads:
+            continue
+        left_tokens_clean.append(t)
+
+    # Parse COUNT NAME pairs from the left block
+    pairs = []
+    i = 0
+    while i < len(left_tokens_clean)-1:
+        c_tok = left_tokens_clean[i]
+        n_tok = left_tokens_clean[i+1]
+        if re.fullmatch(r'\d+(\.\d{3})*', c_tok) or re.fullmatch(r'\d+', c_tok):
+            # normalize thousand separators
+            count = int(re.sub(r'\D', '', c_tok))
+            name = n_tok
+            pairs.append((count, name))
+            i += 2
+        else:
+            # skip stray token
+            i += 1
+
+    # Types list from the right block
+    types = [t for t in right_tokens if re.search(r'\D', t)]  # likely words
+
+    # Zip by index
+    results = []
+    for idx, (count, name) in enumerate(pairs):
+        rdid = types[idx] if idx < len(types) else None
+        if rdid:
+            results.append((count, name, rdid))
+    return results
+
+# ---------------------- Booking ----------------------
 def incr(name, n=1, rdid=None):
     st.session_state.counts_total[name] = int(st.session_state.counts_total.get(name, 0)) + int(n)
     if name not in st.session_state.counts_by_type:
@@ -136,21 +234,15 @@ def remove_employee(name):
     st.session_state.counts_by_type.pop(name, None)
     st.session_state.history.append({"op":"remove","name":name})
 
+# ---------------------- UI ----------------------
 tab1, tab2, tab3 = st.tabs(["📸 Foto verarbeiten", "👥 Mitarbeitende", "📊 Übersicht & Export"])
 
 with tab1:
     st.subheader("Fotos/Scans hochladen")
     imgs = st.file_uploader("Bilder (JPG/PNG)", type=["jpg","jpeg","png"], accept_multiple_files=True)
-    st.markdown("**Standard-Parser:** `^(?P<count>\\d+)\\s+(?P<name>[A-Za-zÄÖÜäöüß]+)\\s*(?P<rdid>[A-Za-zÄÖÜäöüß]+)?$`")
-    use_custom = st.checkbox("Benutzerdefiniertes Regex verwenden")
-    custom_rx = None
-    if use_custom:
-        custom_rx = st.text_input(
-            "Regex mit Gruppen count, name, rdid (rdid optional)",
-            value=r"^(?P<count>\d+)\s+(?P<name>[A-Za-zÄÖÜäöüß]+)\s*(?P<rdid>[\wÄÖÜäöüß]+)?$"
-        )
-    run = st.button("Fotos auslesen & buchen", type="primary", disabled=not imgs)
+    st.markdown("Der Parser erkennt automatisch **Zeilen-** oder **Blockformat**.")
 
+    run = st.button("Fotos auslesen & buchen", type="primary", disabled=not imgs)
     if run and imgs:
         aggregated = defaultdict(lambda: {"total":0, "types":defaultdict(int)})
         texts = []
@@ -160,7 +252,11 @@ with tab1:
             if not txt:
                 continue
             texts.append(txt)
-            rows = parse_lines_access_style(txt, custom_rx)
+
+            rows = parse_lines_row_style(txt)          # try row-style first
+            if not rows:
+                rows = parse_block_access_style(txt)    # then block-style
+
             for cnt, name, rdid in rows:
                 aggregated[name]["total"] += cnt
                 if rdid:
@@ -169,7 +265,7 @@ with tab1:
                         st.session_state.known_types.append(rdid)
 
         if not aggregated:
-            st.warning("Keine passenden Zeilen erkannt. Regex/Fotoqualität prüfen.")
+            st.error("Keine passenden Daten erkannt. Bitte OCR-Rohtext prüfen.")
         else:
             st.success("Erkannte Summen (werden jetzt gebucht):")
             for name, payload in aggregated.items():
@@ -196,7 +292,7 @@ with tab2:
                 total = int(st.session_state.counts_total.get(name, 0))
                 by_type = st.session_state.counts_by_type.get(name, {})
                 st.markdown(f"### {name}  –  Gesamt: **{total}**")
-                # +1 Buttons je Schadenart
+
                 if st.session_state.known_types:
                     cols = st.columns(len(st.session_state.known_types) + 1)
                     for i, t in enumerate(st.session_state.known_types):
@@ -206,7 +302,7 @@ with tab2:
                     if cols[-1].button("+1 Gesamt", key=f"plus1_{name}___total"):
                         incr(name, 1, None)
                         st.success(f"+1 für {name} (ohne Schadenart)")
-                # Anzeige je Schadenart
+
                 if by_type:
                     with st.expander("Schadenarten & Zähler"):
                         tcols = st.columns(3)
@@ -282,4 +378,5 @@ with tab3:
         st.download_button("Export Nach Schadenart (CSV)", buf2.getvalue().encode("utf-8"), file_name=f"by_type_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv")
 
 st.markdown("---")
-st.caption("Für OCR bitte 'pip install easyocr' oder 'pip install pytesseract' (plus Tesseract-Binary). Alle Daten verbleiben lokal.")
+st.caption("Blockparser: erkennt 'AnzahlvonSCHADEN … RD ID …'. Für OCR: 'pip install easyocr' oder 'pip install pytesseract' (plus Tesseract-Binary).")
+
