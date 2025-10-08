@@ -30,7 +30,7 @@ except Exception:
 # ---------------------------------------------------------------
 # Seitenlayout & Stil
 # ---------------------------------------------------------------
-st.set_page_config(page_title="Schaden-Zähler mobil", layout="wide")
+st.set_page_config(page_title="Komplex Schadenverteilung", layout="wide")
 st.markdown(
     """
     <style>
@@ -73,7 +73,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.title("📱 Schaden-Zähler (Mobile Version)")
+st.title("📱 Komplex Schadenverteilung")
 st.caption("Ziel je Schadenart = höchster Wert aller Mitarbeitenden (außer **CGrothe**: –25 %).")
 
 # ---------------------------------------------------------------
