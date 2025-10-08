@@ -280,9 +280,8 @@ with tab2:
     # ---------------------------------------------------------------
     # Hauptbereich: Übersicht + Buttons
     # ---------------------------------------------------------------
-    with col1:
-        st.markdown("...")
-        if not st.session_state.counts_total:
+    st.markdown("...")
+            if not st.session_state.counts_total:
             st.info("Noch keine Mitarbeitenden vorhanden.")
         else:
             for name in sorted(st.session_state.counts_total.keys(), key=lambda s: s.lower()):
