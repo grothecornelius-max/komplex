@@ -204,9 +204,9 @@ with tab2:
             st.markdown(f"### {name} – Gesamt: **{total}**")
 
             # + / – Buttons je Schadenart
-if st.session_state.known_types:
-    for t in st.session_state.known_types:
-        col_plus, col_minus = st.columns(2)
+    if st.session_state.known_types:
+        for t in st.session_state.known_types:
+            col_plus, col_minus = st.columns(2)
         with col_plus:
             if st.button(f"+1 {t}", key=f"plus_{name}_{t}"):
                 incr(name, 1, t)
