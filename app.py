@@ -1,6 +1,6 @@
 import streamlit as st
 from io import BytesIO
-from PIL import Image
+from PIL import Image, ImageOps
 import re
 import json
 from collections import defaultdict
@@ -20,8 +20,15 @@ try:
 except Exception:
     pass
 
+# Optional: HEIC-Unterstützung aktivieren (für iPhone-Fotos)
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except Exception:
+    pass
+
 st.set_page_config(page_title="Schaden-Zähler", layout="wide")
-st.title("📊 Komplex-Schadenverteilung")
+st.title("📊 Schaden-Zähler mit Zielvorgaben")
 st.caption("Ziel je Schadenart = höchster Wert aller Mitarbeitenden, außer **CGrothe** (–25 %).")
 
 # ---------------------------------------------------------------
@@ -44,7 +51,6 @@ def normalize_name(n: str) -> str:
     return (n or "").strip().lower()
 
 def compute_type_max(counts_by_type: dict) -> dict:
-    """Ermittelt pro Schadenart den höchsten Wert."""
     max_per_type = defaultdict(int)
     for _, d in counts_by_type.items():
         for t, c in d.items():
@@ -57,7 +63,6 @@ def compute_type_max(counts_by_type: dict) -> dict:
     return dict(max_per_type)
 
 def compute_targets(counts_by_type: dict):
-    """Erstellt pro Mitarbeiter die Zielwerte je Schadenart."""
     max_per_type = compute_type_max(counts_by_type)
     targets = {}
     all_names = set(counts_by_type.keys()) | set(st.session_state.counts_total.keys())
@@ -71,13 +76,20 @@ def compute_targets(counts_by_type: dict):
         targets[name] = tmap
     return targets, max_per_type
 
+# ---------------------------------------------------------------
+# OCR – robust gegen Handyfotos
+# ---------------------------------------------------------------
 def ocr_image(img_bytes, engine_name):
-    """Liest Text aus Bild."""
+    """Liest Text aus Bild (mit EXIF-Korrektur & Verkleinerung)."""
     try:
-        image = Image.open(BytesIO(img_bytes)).convert("RGB")
+        image = Image.open(BytesIO(img_bytes))
+        image = ImageOps.exif_transpose(image)       # Drehung korrigieren
+        image = image.convert("RGB")
+        image.thumbnail((2000, 2000))                # Größe begrenzen
     except Exception as e:
         st.error(f"Bild konnte nicht geöffnet werden: {e}")
         return ""
+
     if engine_name == "EasyOCR":
         try:
             import easyocr, numpy as np
@@ -97,8 +109,10 @@ def ocr_image(img_bytes, engine_name):
     else:
         return ""
 
+# ---------------------------------------------------------------
+# Parser für Access-Stil-Block
+# ---------------------------------------------------------------
 def parse_block_access_style(text):
-    """Erkennt das OCR-Muster: 'AnzahlvonSCHADEN ... RD ID ...'."""
     t = text.replace("\\n", " ").replace("\\r", " ").replace("\u00a0", " ").replace("\u200b", " ")
     t = re.sub(r"\s+", " ", t).strip()
     tokens = t.split(" ")
@@ -139,6 +153,9 @@ def parse_block_access_style(text):
             results.append((count, name, rdid))
     return results
 
+# ---------------------------------------------------------------
+# Zähler-Update
+# ---------------------------------------------------------------
 def incr(name, n=1, rdid=None):
     """Erhöht oder verringert Zähler (niemals unter 0)."""
     st.session_state.counts_total[name] = max(0, int(st.session_state.counts_total.get(name, 0)) + int(n))
@@ -159,7 +176,7 @@ tab1, tab2, tab3 = st.tabs(["📸 Foto verarbeiten", "👥 Mitarbeitende", "📊
 # ---------------------------------------------------------------
 with tab1:
     st.subheader("Fotos/Scans hochladen")
-    imgs = st.file_uploader("Bilder (JPG/PNG)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+    imgs = st.file_uploader("Bilder (JPG/PNG/HEIC)", type=["jpg", "jpeg", "png", "heic"], accept_multiple_files=True)
     engine = st.selectbox("OCR-Engine wählen", ENGINES or ["(keine verfügbar)"])
     if st.button("Fotos auslesen & buchen", type="primary") and imgs:
         aggregated = defaultdict(lambda: {"total": 0, "types": defaultdict(int)})
@@ -188,7 +205,6 @@ with tab1:
 # ---------------------------------------------------------------
 with tab2:
     st.subheader("Mitarbeitende – Übersicht & Buchung")
-
     targets, max_per_type = compute_targets(st.session_state.counts_by_type)
 
     if not st.session_state.counts_total:
@@ -212,7 +228,7 @@ with tab2:
                         if st.button(f"–1 {t}", key=f"minus_{name}_{t}".replace(" ", "_")):
                             incr(name, -1, t)
 
-            # Tabelle mit Ist / Ziel / Δ
+            # Tabelle
             if max_per_type:
                 st.markdown("**Schadenarten – Ist / Ziel / Δ**")
                 table_md = "| Schadenart | Ist | Ziel | Δ |\n|---|---|---|---|\n"
