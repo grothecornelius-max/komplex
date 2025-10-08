@@ -232,13 +232,54 @@ with tab1:
             st.json(aggregated)
 
 # -------------------------------------------------------------------
-# Tab 2
+# Tab 2: Mitarbeitende – vereinfachte, kompakte Anzeige
 # -------------------------------------------------------------------
 with tab2:
-    st.subheader("Mitarbeitende verwalten & buchen (inkl. Ziele je Schadenart)")
+    st.subheader("Mitarbeitende – Übersicht & Buchung")
+
+    # Ziele berechnen
     targets, max_per_type = compute_targets(st.session_state.counts_by_type)
 
-    col1, col2 = st.columns([2,1])
+    if not st.session_state.counts_total:
+        st.info("Noch keine Mitarbeitenden vorhanden.")
+    else:
+        for name in sorted(st.session_state.counts_total.keys(), key=lambda s: s.lower()):
+            total = int(st.session_state.counts_total.get(name, 0))
+            by_type = st.session_state.counts_by_type.get(name, {})
+            emp_targets = targets.get(name, {})
+
+            st.markdown(f"### {name} – Gesamt: **{total}**")
+
+            # +1-Buttons je Schadenart (ohne Rerun)
+            if st.session_state.known_types:
+                cols = st.columns(len(st.session_state.known_types))
+                for i, t in enumerate(st.session_state.known_types):
+                    if cols[i].button(f"+1 {t}", key=f"{name}_{t}"):
+                        incr(name, 1, t)
+
+            # Tabelle: Ist / Ziel / Δ
+            if max_per_type:
+                st.markdown("**Schadenarten – Ist / Ziel / Δ**")
+                table_md = "| Schadenart | Ist | Ziel | Δ |\n|---|---|---|---|\n"
+                for t in sorted(max_per_type.keys()):
+                    ist = int(by_type.get(t, 0))
+                    ziel = int(emp_targets.get(t, 0))
+                    delta = ist - ziel
+                    if delta > 0:
+                        delta_str = f"**+{delta}** 🚨"
+                    elif delta < 0:
+                        delta_str = f"{delta} ⬇️"
+                    else:
+                        delta_str = "0 ✅"
+                    special = " _(–25 % CGrothe)_" if normalize_name(name) == "cgrothe" and ziel > 0 else ""
+                    table_md += f"| {t} | {ist} | {ziel}{special} | {delta_str} |\n"
+                st.markdown(table_md)
+
+            st.markdown("---")
+
+    # ---------------------------------------------------------------
+    # Hauptbereich: Übersicht + Buttons
+    # ---------------------------------------------------------------
     with col1:
         if not st.session_state.counts_total:
             st.info("Noch keine Mitarbeitenden vorhanden.")
@@ -246,50 +287,69 @@ with tab2:
             for name in sorted(st.session_state.counts_total.keys(), key=lambda s: s.lower()):
                 total = int(st.session_state.counts_total.get(name, 0))
                 by_type = st.session_state.counts_by_type.get(name, {})
+                emp_targets = targets.get(name, {})
+
                 st.markdown(f"### {name} – Gesamt: **{total}**")
 
-                # +1 Buttons je Schadenart
+                # +1-Buttons für Schadenarten (ohne Rerun!)
                 if st.session_state.known_types:
                     cols = st.columns(len(st.session_state.known_types))
                     for i, t in enumerate(st.session_state.known_types):
                         if cols[i].button(f"+1 {t}", key=f"{name}_{t}"):
                             incr(name, 1, t)
-                            st.rerun()
+                            st.session_state["last_click"] = f"{name}-{t}"  # kein rerun nötig
 
-                # Ziele / Abweichung
-                emp_targets = targets.get(name, {})
+                # Tabelle mit Ist/Ziel/Delta sofort sichtbar
                 if max_per_type:
-                    with st.expander("Schadenarten – Ist / Ziel / Abweichung"):
-                        header = st.columns([3,1,1,1])
-                        header[0].markdown("**Schadenart**")
-                        header[1].markdown("**Ist**")
-                        header[2].markdown("**Ziel**")
-                        header[3].markdown("**Δ**")
-                        for t in sorted(max_per_type.keys()):
-                            ist = int(by_type.get(t, 0))
-                            ziel = int(emp_targets.get(t, 0))
-                            delta = ist - ziel
-                            row = st.columns([3,1,1,1])
-                            row[0].markdown(t)
-                            row[1].markdown(f"{ist}")
-                            row[2].markdown(f"{ziel}" + (" _(–25% CGrothe)_" if normalize_name(name)=="cgrothe" and ziel>0 else ""))
-                            if delta > 0:
-                                row[3].markdown(f"**+{delta}** 🚨")
-                            elif delta < 0:
-                                row[3].markdown(f"{delta} ⬇️")
-                            else:
-                                row[3].markdown("0 ✅")
+                    st.markdown("**Schadenarten – Ist / Ziel / Δ**")
+                    table_md = "| Schadenart | Ist | Ziel | Δ |\n|---|---|---|---|\n"
+                    for t in sorted(max_per_type.keys()):
+                        ist = int(by_type.get(t, 0))
+                        ziel = int(emp_targets.get(t, 0))
+                        delta = ist - ziel
+                        if delta > 0:
+                            delta_str = f"**+{delta}** 🚨"
+                        elif delta < 0:
+                            delta_str = f"{delta} ⬇️"
+                        else:
+                            delta_str = "0 ✅"
+                        special = " _(–25 % CGrothe)_" if normalize_name(name) == "cgrothe" and ziel > 0 else ""
+                        table_md += f"| {t} | {ist} | {ziel}{special} | {delta_str} |\n"
+                    st.markdown(table_md)
+
                 st.markdown("---")
 
+    # ---------------------------------------------------------------
+    # Seitenbereich: Mitarbeiter hinzufügen/entfernen
+    # ---------------------------------------------------------------
     with col2:
         st.markdown("**Neuen Mitarbeiter hinzufügen**")
-        new_name = st.text_input("Name")
-        if st.button("Hinzufügen"):
+        new_name = st.text_input("Name", key="new_emp_name")
+        if st.button("Hinzufügen", type="primary"):
             nn = (new_name or "").strip()
-            if nn and nn not in st.session_state.counts_total:
+            if not nn:
+                st.error("Name darf nicht leer sein.")
+            elif nn in st.session_state.counts_total:
+                st.warning("Name existiert bereits.")
+            else:
                 st.session_state.counts_total[nn] = 0
                 st.session_state.counts_by_type[nn] = {}
-                st.success(f"{nn} hinzugefügt.")
+                st.success(f"{nn} hinzugefügt (Gesamt = 0).")
+
+        st.markdown("---")
+        st.markdown("**Mitarbeiter entfernen oder Zahl setzen**")
+        if st.session_state.counts_total:
+            sel = st.selectbox("Mitarbeiter auswählen", options=list(st.session_state.counts_total.keys()))
+            new_total = st.number_input("Gesamt setzen", value=int(st.session_state.counts_total[sel]), min_value=0, step=1)
+            if st.button("Gesamt übernehmen"):
+                set_count(sel, new_total, st.session_state.counts_by_type.get(sel, {}))
+                st.success(f"{sel}: Gesamt auf {new_total} gesetzt.")
+            if st.button("Mitarbeiter entfernen", type="secondary"):
+                remove_employee(sel)
+                st.warning(f"{sel} entfernt.")
+        else:
+            st.info("Noch keine Mitarbeitenden angelegt.")
+
 
 # -------------------------------------------------------------------
 # Tab 3
