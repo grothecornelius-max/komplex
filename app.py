@@ -281,6 +281,7 @@ with tab2:
     # Hauptbereich: Übersicht + Buttons
     # ---------------------------------------------------------------
     with col1:
+        st.markdown("...")
         if not st.session_state.counts_total:
             st.info("Noch keine Mitarbeitenden vorhanden.")
         else:
