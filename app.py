@@ -203,12 +203,17 @@ with tab2:
 
             st.markdown(f"### {name} – Gesamt: **{total}**")
 
-            # +1 Buttons je Schadenart
-            if st.session_state.known_types:
-                cols = st.columns(len(st.session_state.known_types))
-                for i, t in enumerate(st.session_state.known_types):
-                    if cols[i].button(f"+1 {t}", key=f"{name}_{t}"):
-                        incr(name, 1, t)
+            # + / – Buttons je Schadenart
+if st.session_state.known_types:
+    for t in st.session_state.known_types:
+        col_plus, col_minus = st.columns(2)
+        with col_plus:
+            if st.button(f"+1 {t}", key=f"plus_{name}_{t}"):
+                incr(name, 1, t)
+        with col_minus:
+            if st.button(f"–1 {t}", key=f"minus_{name}_{t}"):
+                incr(name, -1, t)
+
 
             # Tabelle
             if max_per_type:
