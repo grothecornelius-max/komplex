@@ -13,7 +13,7 @@ DATA_FILE = Path("data/state.json")
 DATA_FILE.parent.mkdir(exist_ok=True)
 
 st.set_page_config(page_title="Schaden-Zähler", layout="wide")
-st.title("📊 Schaden-Zähler mit Zielvorgaben")
+st.title("📊 Schaden-Zähler mit Zielvorgaben und fairer Rotation")
 st.caption("Ziel je Schadenart = höchster Wert aller Mitarbeitenden, außer **CGrothe** (–25 %).")
 
 # ===============================================================
@@ -23,7 +23,7 @@ def init_state():
     st.session_state.setdefault("counts_total", {})
     st.session_state.setdefault("counts_by_type", {})
     st.session_state.setdefault("known_types", ["Regulierer", "Sachverständiger"])
-    st.session_state.setdefault("rotation_index", {})  # NEU: Rotationsspeicher
+    st.session_state.setdefault("rotation_index", {})  # Rotationsspeicher
 
 # ===============================================================
 # Persistenz
@@ -79,8 +79,11 @@ def compute_targets(counts_by_type: dict):
         targets[name] = tmap
     return targets, max_per_type
 
+# ===============================================================
+# Faire Rotation mit Zielprüfung
+# ===============================================================
 def get_next_assignments():
-    """Bestimmt pro Schadenart den nächsten Mitarbeitenden (Rotation mit Zielprüfung)."""
+    """Ermittelt pro Schadenart den nächsten Mitarbeitenden nach Zielerreichung und Rotation."""
     next_for_type = {}
     targets, _ = compute_targets(st.session_state.counts_by_type)
 
@@ -89,6 +92,7 @@ def get_next_assignments():
         if not names:
             continue
 
+        # Nur Mitarbeitende mit unerreichtem Ziel
         active = []
         for n in names:
             ist = int(st.session_state.counts_by_type.get(n, {}).get(t, 0))
@@ -96,8 +100,10 @@ def get_next_assignments():
             if ist < ziel:
                 active.append(n)
 
+        # Wenn niemand mehr aktiv -> neue Runde mit allen
         if not active:
             active = names
+            st.session_state.rotation_index[t] = 0
 
         idx = st.session_state.rotation_index.get(t, 0)
         if idx >= len(active):
@@ -105,13 +111,15 @@ def get_next_assignments():
 
         next_name = active[idx]
         next_for_type[t] = next_name
+
+        # Index erhöhen (rotierend)
         st.session_state.rotation_index[t] = (idx + 1) % len(active)
 
     save_state()
     return next_for_type
 
 # ===============================================================
-# OCR-Funktion (stabil)
+# OCR-Funktion
 # ===============================================================
 def ocr_image(img_bytes, engine_name):
     try:
@@ -208,7 +216,7 @@ load_state()
 # ===============================================================
 # Seitenleiste (Rotation)
 # ===============================================================
-st.sidebar.header("📌 Nächste Zuweisung (rotierend)")
+st.sidebar.header("📌 Nächste Zuweisung (nach Ziel & Rotation)")
 if st.session_state.counts_by_type:
     next_targets = get_next_assignments()
     for t, name in next_targets.items():
@@ -250,7 +258,7 @@ with tab1:
             st.success("Daten übernommen.")
 
 # ---------------------------------------------------------------
-# Tab 2
+# Tab 2 – Mitarbeitende (Statusansicht)
 # ---------------------------------------------------------------
 with tab2:
     st.subheader("Mitarbeitende – Übersicht & Buchung")
@@ -263,6 +271,7 @@ with tab2:
             by_type = st.session_state.counts_by_type.get(name, {})
             emp_targets = targets.get(name, {})
             st.markdown(f"### {name} – Gesamt: **{total}**")
+
             for t in st.session_state.known_types:
                 c1, c2 = st.columns(2)
                 with c1:
@@ -271,19 +280,37 @@ with tab2:
                 with c2:
                     if st.button(f"–1 {t}", key=f"minus_{name}_{t}".replace(" ", "_")):
                         incr(name, -1, t)
+
+            # Tabellenanzeige
+            if max_per_type:
+                st.markdown("**Schadenarten – Ist / Ziel / Δ**")
+                table_md = "| Schadenart | Ist | Ziel | Δ |\n|---|---|---|---|\n"
+                for t in sorted(max_per_type.keys()):
+                    ist = int(by_type.get(t, 0))
+                    ziel = int(emp_targets.get(t, 0))
+                    delta = ist - ziel
+                    if delta > 0:
+                        delta_str = f"**+{delta}** 🚨"
+                    elif delta < 0:
+                        delta_str = f"{delta} ⬇️"
+                    else:
+                        delta_str = "0 ✅"
+                    special = " _(–25 % CGrothe)_" if normalize_name(name) == "cgrothe" and ziel > 0 else ""
+                    table_md += f"| {t} | {ist} | {ziel}{special} | {delta_str} |\n"
+                st.markdown(table_md)
             st.markdown("---")
 
 # ---------------------------------------------------------------
 # Tab 3
 # ---------------------------------------------------------------
 with tab3:
-    st.subheader("Übersicht")
+    st.subheader("Gesamtübersicht")
     targets, max_per_type = compute_targets(st.session_state.counts_by_type)
     if not st.session_state.counts_total:
         st.info("Keine Daten vorhanden.")
     else:
         all_types = sorted(max_per_type.keys())
-        data = []
+        rows = []
         for name in sorted(st.session_state.counts_total.keys(), key=lambda s: s.lower()):
             row = {"Mitarbeiter:in": name}
             for t in all_types:
@@ -294,8 +321,8 @@ with tab3:
                 row[f"{t} (Ziel)"] = ziel
                 row[f"{t} (Δ)"] = delta
             row["Gesamt"] = int(st.session_state.counts_total.get(name, 0))
-            data.append(row)
-        st.table(data)
+            rows.append(row)
+        st.table(rows)
 
 st.markdown("---")
 st.caption("Zieldefinition: pro Schadenart = Maximum über alle Mitarbeitenden; Ausnahme **CGrothe**: 25 % weniger.")
