@@ -4,49 +4,49 @@ from PIL import Image, ImageOps
 import re
 import json
 from collections import defaultdict
+from pathlib import Path
 
-# ---------------------------------------------------------------
-# OCR Engines vorbereiten
-# ---------------------------------------------------------------
-ENGINES = []
-try:
-    import easyocr
-    ENGINES.append("EasyOCR")
-except Exception:
-    pass
-try:
-    import pytesseract
-    ENGINES.append("Tesseract")
-except Exception:
-    pass
-
-# Optional: HEIC-Unterstützung aktivieren (für iPhone-Fotos)
-try:
-    from pillow_heif import register_heif_opener
-    register_heif_opener()
-except Exception:
-    pass
+# ===============================================================
+# Konfiguration
+# ===============================================================
+DATA_FILE = Path("data/state.json")
+DATA_FILE.parent.mkdir(exist_ok=True)
 
 st.set_page_config(page_title="Komplex Schadenverteilung", layout="wide")
 st.title("📊 Komplex Schadenverteilung")
 st.caption("Ziel je Schadenart = höchster Wert aller Mitarbeitenden, außer **CGrothe** (–25 %).")
 
-# ---------------------------------------------------------------
+# ===============================================================
 # Initialisierung
-# ---------------------------------------------------------------
+# ===============================================================
 def init_state():
-    if "counts_total" not in st.session_state:
-        st.session_state.counts_total = {}
-    if "counts_by_type" not in st.session_state:
-        st.session_state.counts_by_type = {}
-    if "known_types" not in st.session_state:
-        st.session_state.known_types = ["Regulierer", "Sachverständiger"]
+    st.session_state.setdefault("counts_total", {})
+    st.session_state.setdefault("counts_by_type", {})
+    st.session_state.setdefault("known_types", ["Regulierer", "Sachverständiger"])
 
-init_state()
+# ===============================================================
+# Persistenz-Funktionen
+# ===============================================================
+def save_state():
+    data = {
+        "counts_total": st.session_state.counts_total,
+        "counts_by_type": st.session_state.counts_by_type,
+        "known_types": st.session_state.known_types,
+    }
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
-# ---------------------------------------------------------------
+def load_state():
+    if DATA_FILE.exists():
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        st.session_state.counts_total = data.get("counts_total", {})
+        st.session_state.counts_by_type = data.get("counts_by_type", {})
+        st.session_state.known_types = data.get("known_types", ["Regulierer", "Sachverständiger"])
+
+# ===============================================================
 # Hilfsfunktionen
-# ---------------------------------------------------------------
+# ===============================================================
 def normalize_name(n: str) -> str:
     return (n or "").strip().lower()
 
@@ -76,16 +76,15 @@ def compute_targets(counts_by_type: dict):
         targets[name] = tmap
     return targets, max_per_type
 
-# ---------------------------------------------------------------
-# OCR – robust gegen Handyfotos
-# ---------------------------------------------------------------
+# ===============================================================
+# OCR-Funktion (stabil & mobilfreundlich)
+# ===============================================================
 def ocr_image(img_bytes, engine_name):
-    """Liest Text aus Bild (mit EXIF-Korrektur & Verkleinerung)."""
     try:
         image = Image.open(BytesIO(img_bytes))
-        image = ImageOps.exif_transpose(image)       # Drehung korrigieren
+        image = ImageOps.exif_transpose(image)
         image = image.convert("RGB")
-        image.thumbnail((2000, 2000))                # Größe begrenzen
+        image.thumbnail((2000, 2000))
     except Exception as e:
         st.error(f"Bild konnte nicht geöffnet werden: {e}")
         return ""
@@ -109,9 +108,9 @@ def ocr_image(img_bytes, engine_name):
     else:
         return ""
 
-# ---------------------------------------------------------------
-# Parser für Access-Stil-Block
-# ---------------------------------------------------------------
+# ===============================================================
+# Parser (Access-ähnlicher Text)
+# ===============================================================
 def parse_block_access_style(text):
     t = text.replace("\\n", " ").replace("\\r", " ").replace("\u00a0", " ").replace("\u200b", " ")
     t = re.sub(r"\s+", " ", t).strip()
@@ -153,11 +152,10 @@ def parse_block_access_style(text):
             results.append((count, name, rdid))
     return results
 
-# ---------------------------------------------------------------
-# Zähler-Update
-# ---------------------------------------------------------------
+# ===============================================================
+# Zähler
+# ===============================================================
 def incr(name, n=1, rdid=None):
-    """Erhöht oder verringert Zähler (niemals unter 0)."""
     st.session_state.counts_total[name] = max(0, int(st.session_state.counts_total.get(name, 0)) + int(n))
     if name not in st.session_state.counts_by_type:
         st.session_state.counts_by_type[name] = {}
@@ -165,19 +163,46 @@ def incr(name, n=1, rdid=None):
         current = int(st.session_state.counts_by_type[name].get(rdid, 0))
         new_value = max(0, current + int(n))
         st.session_state.counts_by_type[name][rdid] = new_value
+    save_state()
 
-# ---------------------------------------------------------------
+# ===============================================================
+# Lade gespeicherte Daten beim Start
+# ===============================================================
+init_state()
+load_state()
+
+# ===============================================================
+# Seitenleiste: Nächste Zuweisung
+# ===============================================================
+targets, max_per_type = compute_targets(st.session_state.counts_by_type)
+st.sidebar.header("📌 Nächste Zuweisung")
+
+if st.session_state.counts_by_type:
+    for t in st.session_state.known_types:
+        min_name = None
+        min_val = None
+        for name, d in st.session_state.counts_by_type.items():
+            val = d.get(t, 0)
+            if min_val is None or val < min_val:
+                min_val = val
+                min_name = name
+        if min_name:
+            st.sidebar.write(f"**{t} → {min_name}**")
+else:
+    st.sidebar.info("Noch keine Zuweisungen erfasst.")
+
+# ===============================================================
 # Tabs
-# ---------------------------------------------------------------
+# ===============================================================
 tab1, tab2, tab3 = st.tabs(["📸 Foto verarbeiten", "👥 Mitarbeitende", "📊 Übersicht & Export"])
 
 # ---------------------------------------------------------------
-# Tab 1 – Fotoverarbeitung
+# Tab 1
 # ---------------------------------------------------------------
 with tab1:
     st.subheader("Fotos/Scans hochladen")
-    imgs = st.file_uploader("Bilder (JPG/PNG/HEIC)", type=["jpg", "jpeg", "png", "heic"], accept_multiple_files=True)
-    engine = st.selectbox("OCR-Engine wählen", ENGINES or ["(keine verfügbar)"])
+    imgs = st.file_uploader("Bilder (JPG/PNG)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+    engine = st.selectbox("OCR-Engine wählen", ["Tesseract", "EasyOCR"])
     if st.button("Fotos auslesen & buchen", type="primary") and imgs:
         aggregated = defaultdict(lambda: {"total": 0, "types": defaultdict(int)})
         for up in imgs:
@@ -198,37 +223,30 @@ with tab1:
                 for t, c in payload["types"].items():
                     incr(name, c, t)
             st.success("Daten erfolgreich übernommen.")
-            st.json(aggregated)
 
 # ---------------------------------------------------------------
-# Tab 2 – Mitarbeitende
+# Tab 2
 # ---------------------------------------------------------------
 with tab2:
     st.subheader("Mitarbeitende – Übersicht & Buchung")
-    targets, max_per_type = compute_targets(st.session_state.counts_by_type)
-
     if not st.session_state.counts_total:
         st.info("Noch keine Mitarbeitenden vorhanden.")
     else:
+        targets, max_per_type = compute_targets(st.session_state.counts_by_type)
         for name in sorted(st.session_state.counts_total.keys(), key=lambda s: s.lower()):
             total = int(st.session_state.counts_total.get(name, 0))
             by_type = st.session_state.counts_by_type.get(name, {})
             emp_targets = targets.get(name, {})
-
             st.markdown(f"### {name} – Gesamt: **{total}**")
+            for t in st.session_state.known_types:
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button(f"+1 {t}", key=f"plus_{name}_{t}".replace(" ", "_")):
+                        incr(name, 1, t)
+                with c2:
+                    if st.button(f"–1 {t}", key=f"minus_{name}_{t}".replace(" ", "_")):
+                        incr(name, -1, t)
 
-            # + / – Buttons je Schadenart
-            if st.session_state.known_types:
-                for t in st.session_state.known_types:
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if st.button(f"+1 {t}", key=f"plus_{name}_{t}".replace(" ", "_")):
-                            incr(name, 1, t)
-                    with c2:
-                        if st.button(f"–1 {t}", key=f"minus_{name}_{t}".replace(" ", "_")):
-                            incr(name, -1, t)
-
-            # Tabelle
             if max_per_type:
                 st.markdown("**Schadenarten – Ist / Ziel / Δ**")
                 table_md = "| Schadenart | Ist | Ziel | Δ |\n|---|---|---|---|\n"
@@ -245,11 +263,10 @@ with tab2:
                     special = " _(–25 % CGrothe)_" if normalize_name(name) == "cgrothe" and ziel > 0 else ""
                     table_md += f"| {t} | {ist} | {ziel}{special} | {delta_str} |\n"
                 st.markdown(table_md)
-
             st.markdown("---")
 
 # ---------------------------------------------------------------
-# Tab 3 – Übersicht
+# Tab 3
 # ---------------------------------------------------------------
 with tab3:
     st.subheader("Übersicht")
