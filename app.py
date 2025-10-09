@@ -12,8 +12,8 @@ from pathlib import Path
 DATA_FILE = Path("data/state.json")
 DATA_FILE.parent.mkdir(exist_ok=True)
 
-st.set_page_config(page_title="Komplex Schadenverteilung", layout="wide")
-st.title("📊 Komplex Schadenverteilung")
+st.set_page_config(page_title="Schaden-Zähler", layout="wide")
+st.title("📊 Schaden-Zähler mit Zielvorgaben")
 st.caption("Ziel je Schadenart = höchster Wert aller Mitarbeitenden, außer **CGrothe** (–25 %).")
 
 # ===============================================================
@@ -23,15 +23,17 @@ def init_state():
     st.session_state.setdefault("counts_total", {})
     st.session_state.setdefault("counts_by_type", {})
     st.session_state.setdefault("known_types", ["Regulierer", "Sachverständiger"])
+    st.session_state.setdefault("rotation_index", {})  # NEU: Rotationsspeicher
 
 # ===============================================================
-# Persistenz-Funktionen
+# Persistenz
 # ===============================================================
 def save_state():
     data = {
         "counts_total": st.session_state.counts_total,
         "counts_by_type": st.session_state.counts_by_type,
         "known_types": st.session_state.known_types,
+        "rotation_index": st.session_state.rotation_index,
     }
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -43,6 +45,7 @@ def load_state():
         st.session_state.counts_total = data.get("counts_total", {})
         st.session_state.counts_by_type = data.get("counts_by_type", {})
         st.session_state.known_types = data.get("known_types", ["Regulierer", "Sachverständiger"])
+        st.session_state.rotation_index = data.get("rotation_index", {})
 
 # ===============================================================
 # Hilfsfunktionen
@@ -76,8 +79,39 @@ def compute_targets(counts_by_type: dict):
         targets[name] = tmap
     return targets, max_per_type
 
+def get_next_assignments():
+    """Bestimmt pro Schadenart den nächsten Mitarbeitenden (Rotation mit Zielprüfung)."""
+    next_for_type = {}
+    targets, _ = compute_targets(st.session_state.counts_by_type)
+
+    for t in st.session_state.known_types:
+        names = sorted(st.session_state.counts_total.keys(), key=lambda s: s.lower())
+        if not names:
+            continue
+
+        active = []
+        for n in names:
+            ist = int(st.session_state.counts_by_type.get(n, {}).get(t, 0))
+            ziel = int(targets.get(n, {}).get(t, 0))
+            if ist < ziel:
+                active.append(n)
+
+        if not active:
+            active = names
+
+        idx = st.session_state.rotation_index.get(t, 0)
+        if idx >= len(active):
+            idx = 0
+
+        next_name = active[idx]
+        next_for_type[t] = next_name
+        st.session_state.rotation_index[t] = (idx + 1) % len(active)
+
+    save_state()
+    return next_for_type
+
 # ===============================================================
-# OCR-Funktion (stabil & mobilfreundlich)
+# OCR-Funktion (stabil)
 # ===============================================================
 def ocr_image(img_bytes, engine_name):
     try:
@@ -89,7 +123,14 @@ def ocr_image(img_bytes, engine_name):
         st.error(f"Bild konnte nicht geöffnet werden: {e}")
         return ""
 
-    if engine_name == "EasyOCR":
+    if engine_name == "Tesseract":
+        try:
+            import pytesseract
+            return pytesseract.image_to_string(image, lang="deu+eng")
+        except Exception as e:
+            st.error(f"Tesseract-Fehler: {e}")
+            return ""
+    elif engine_name == "EasyOCR":
         try:
             import easyocr, numpy as np
             reader = easyocr.Reader(["de", "en"], gpu=False)
@@ -98,18 +139,11 @@ def ocr_image(img_bytes, engine_name):
         except Exception as e:
             st.error(f"EasyOCR-Fehler: {e}")
             return ""
-    elif engine_name == "Tesseract":
-        try:
-            import pytesseract
-            return pytesseract.image_to_string(image, lang="deu+eng")
-        except Exception as e:
-            st.error(f"Tesseract-Fehler: {e}")
-            return ""
     else:
         return ""
 
 # ===============================================================
-# Parser (Access-ähnlicher Text)
+# Parser
 # ===============================================================
 def parse_block_access_style(text):
     t = text.replace("\\n", " ").replace("\\r", " ").replace("\u00a0", " ").replace("\u200b", " ")
@@ -130,7 +164,7 @@ def parse_block_access_style(text):
                 break
     left = tokens if rd_idx is None else tokens[:rd_idx]
     right = [] if rd_idx is None else tokens[rd_idx:]
-    left_clean = [tok for tok in left if tok.upper() not in {"ANZAHLVONSCHADEN", "ZUSTAENDIG", "ZUSTÄNDIG"}]
+    left_clean = [tok for tok in left if tok.upper() not in {"ANZAHLVONSCHADEN", "ZUSTAENDIG"}]
     right_clean = [t for t in right if t.upper() not in {"RD", "ID", "RD_ID", "RDID"}]
     pairs = []
     i = 0
@@ -166,35 +200,26 @@ def incr(name, n=1, rdid=None):
     save_state()
 
 # ===============================================================
-# Lade gespeicherte Daten beim Start
+# Startzustand laden
 # ===============================================================
 init_state()
 load_state()
 
 # ===============================================================
-# Seitenleiste: Nächste Zuweisung
+# Seitenleiste (Rotation)
 # ===============================================================
-targets, max_per_type = compute_targets(st.session_state.counts_by_type)
-st.sidebar.header("📌 Nächste Zuweisung")
-
+st.sidebar.header("📌 Nächste Zuweisung (rotierend)")
 if st.session_state.counts_by_type:
-    for t in st.session_state.known_types:
-        min_name = None
-        min_val = None
-        for name, d in st.session_state.counts_by_type.items():
-            val = d.get(t, 0)
-            if min_val is None or val < min_val:
-                min_val = val
-                min_name = name
-        if min_name:
-            st.sidebar.write(f"**{t} → {min_name}**")
+    next_targets = get_next_assignments()
+    for t, name in next_targets.items():
+        st.sidebar.write(f"**{t} → {name}**")
 else:
-    st.sidebar.info("Noch keine Zuweisungen erfasst.")
+    st.sidebar.info("Noch keine Daten vorhanden.")
 
 # ===============================================================
 # Tabs
 # ===============================================================
-tab1, tab2, tab3 = st.tabs(["📸 Foto verarbeiten", "👥 Mitarbeitende", "📊 Übersicht & Export"])
+tab1, tab2, tab3 = st.tabs(["📸 Foto verarbeiten", "👥 Mitarbeitende", "📊 Übersicht"])
 
 # ---------------------------------------------------------------
 # Tab 1
@@ -222,7 +247,7 @@ with tab1:
             for name, payload in aggregated.items():
                 for t, c in payload["types"].items():
                     incr(name, c, t)
-            st.success("Daten erfolgreich übernommen.")
+            st.success("Daten übernommen.")
 
 # ---------------------------------------------------------------
 # Tab 2
@@ -246,23 +271,6 @@ with tab2:
                 with c2:
                     if st.button(f"–1 {t}", key=f"minus_{name}_{t}".replace(" ", "_")):
                         incr(name, -1, t)
-
-            if max_per_type:
-                st.markdown("**Schadenarten – Ist / Ziel / Δ**")
-                table_md = "| Schadenart | Ist | Ziel | Δ |\n|---|---|---|---|\n"
-                for t in sorted(max_per_type.keys()):
-                    ist = int(by_type.get(t, 0))
-                    ziel = int(emp_targets.get(t, 0))
-                    delta = ist - ziel
-                    if delta > 0:
-                        delta_str = f"**+{delta}** 🚨"
-                    elif delta < 0:
-                        delta_str = f"{delta} ⬇️"
-                    else:
-                        delta_str = "0 ✅"
-                    special = " _(–25 % CGrothe)_" if normalize_name(name) == "cgrothe" and ziel > 0 else ""
-                    table_md += f"| {t} | {ist} | {ziel}{special} | {delta_str} |\n"
-                st.markdown(table_md)
             st.markdown("---")
 
 # ---------------------------------------------------------------
