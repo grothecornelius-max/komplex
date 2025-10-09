@@ -119,9 +119,15 @@ def get_next_assignments():
     return next_for_type
 
 # ===============================================================
-# OCR-Funktion
+# OCR (nur EasyOCR)
 # ===============================================================
-def ocr_image(img_bytes, engine_name):
+@st.cache_resource(show_spinner=False)
+def get_easyocr_reader():
+    import easyocr
+    return easyocr.Reader(["de", "en"], gpu=False)
+
+def ocr_image(img_bytes):
+    """Liest Text aus Bild (nur EasyOCR)."""
     try:
         image = Image.open(BytesIO(img_bytes))
         image = ImageOps.exif_transpose(image)
@@ -131,23 +137,13 @@ def ocr_image(img_bytes, engine_name):
         st.error(f"Bild konnte nicht geöffnet werden: {e}")
         return ""
 
-    if engine_name == "Tesseract":
-        try:
-            import pytesseract
-            return pytesseract.image_to_string(image, lang="deu+eng")
-        except Exception as e:
-            st.error(f"Tesseract-Fehler: {e}")
-            return ""
-    elif engine_name == "EasyOCR":
-        try:
-            import easyocr, numpy as np
-            reader = easyocr.Reader(["de", "en"], gpu=False)
-            result = reader.readtext(np.array(image), detail=0, paragraph=True)
-            return "\n".join(result)
-        except Exception as e:
-            st.error(f"EasyOCR-Fehler: {e}")
-            return ""
-    else:
+    try:
+        import numpy as np
+        reader = get_easyocr_reader()
+        result = reader.readtext(np.array(image), detail=0, paragraph=True)
+        return "\n".join(result)
+    except Exception as e:
+        st.error(f"EasyOCR-Fehler: {e}")
         return ""
 
 # ===============================================================
@@ -233,32 +229,41 @@ tab1, tab2, tab3 = st.tabs(["📸 Foto verarbeiten", "👥 Mitarbeitende", "📊
 # Tab 1
 # ---------------------------------------------------------------
 with tab1:
-    st.subheader("Fotos/Scans hochladen")
+    st.subheader("Fotos/Scans hochladen (EasyOCR)")
     imgs = st.file_uploader("Bilder (JPG/PNG)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
-    engine = st.selectbox("OCR-Engine wählen", ["Tesseract", "EasyOCR"])
-    if st.button("Fotos auslesen & buchen", type="primary") and imgs:
+
+    if st.button("Fotos auslesen & übernehmen", type="primary") and imgs:
+        # 🔄 Alte Daten löschen – neue ersetzen
+        st.session_state.counts_total = {}
+        st.session_state.counts_by_type = {}
+        st.session_state.rotation_index = {}
+
         aggregated = defaultdict(lambda: {"total": 0, "types": defaultdict(int)})
+
         for up in imgs:
             b = up.read()
-            txt = ocr_image(b, engine)
+            txt = ocr_image(b)
             if not txt:
                 continue
             rows = parse_block_access_style(txt)
             for cnt, name, rdid in rows:
-                aggregated[name]["total"] += cnt
-                aggregated[name]["types"][rdid] += cnt
+                aggregated[name]["total"] = cnt
+                aggregated[name]["types"][rdid] = cnt
                 if rdid not in st.session_state.known_types:
                     st.session_state.known_types.append(rdid)
+
         if not aggregated:
             st.error("Keine passenden Daten erkannt.")
         else:
+            # Neue Daten übernehmen
             for name, payload in aggregated.items():
-                for t, c in payload["types"].items():
-                    incr(name, c, t)
-            st.success("Daten übernommen.")
+                st.session_state.counts_total[name] = payload["total"]
+                st.session_state.counts_by_type[name] = payload["types"]
+            save_state()
+            st.success("Neue Daten erfolgreich übernommen (alte Werte überschrieben).")
 
 # ---------------------------------------------------------------
-# Tab 2 – Mitarbeitende (Statusansicht)
+# Tab 2 – Mitarbeitende
 # ---------------------------------------------------------------
 with tab2:
     st.subheader("Mitarbeitende – Übersicht & Buchung")
